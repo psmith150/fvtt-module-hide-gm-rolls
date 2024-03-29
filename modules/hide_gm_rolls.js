@@ -311,6 +311,21 @@ class HideGMRolls {
 		}
 	}
 
+	static _sanitizeReadySetRoll5eSave(msg, html) {
+		if (!game.modules.get('ready-set-roll-5e')?.active) {
+			return;
+		}
+
+		if (!this._is5eSaveRoll(msg)) {
+			return;
+		}
+
+		const saveResult = html.find('.rsr-multiroll .success, .rsr-multiroll .failure')
+		if (saveResult) {
+			saveResult.removeClass('success failure')
+		}
+	}
+
 	static _sanitizePF2e(html) {
 		if (game.system.id !== 'pf2e') {
 			return;
@@ -385,6 +400,10 @@ class HideGMRolls {
 	
 	static _is5eDamageRoll(msg) {
 		return msg.flags.dnd5e?.roll?.type === 'damage'
+	}
+
+	static _is5eSaveRoll(msg) {
+		return msg.flags.dnd5e?.roll?.type === 'save'
 	}
 
 	static sanitizeCard(html, msg) {
@@ -465,6 +484,15 @@ Hooks.on('dnd5e.renderChatMessage', (msg, html) => {
 	HideGMRolls.hideRoll(html, msg);
 	HideGMRolls.sanitize5eRoll(html, msg);
 	HideGMRolls.sanitize5eCard(html, msg);
+});
+
+Hooks.on('rsrRenderChatMessage', (msg, html) => {
+	// Create JQuery object to maintain compatibility
+	html = $(html);
+	HideGMRolls.hideRoll(html, msg);
+	HideGMRolls.sanitize5eRoll(html, msg);
+	HideGMRolls.sanitize5eCard(html, msg);
+	HideGMRolls._sanitizeReadySetRoll5eSave(msg, html);
 });
 
 Hooks.on('updateChatMessage', (msg, _data, _diff, id) => {
