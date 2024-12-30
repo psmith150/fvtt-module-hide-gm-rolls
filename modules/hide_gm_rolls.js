@@ -161,19 +161,19 @@ class HideGMRolls {
 		return true;
 	}
 
-	static hideRoll(app, html, msg) {
+	static hideRoll(html, msg) {
 		if (!this.shouldHide(msg)) {
 			return;
 		}
 
 
 		if (isNewerVersion(game.version, "10")) {
-			if (app.sound) {
-				app.sound = null;
+			if (msg.sound) {
+				msg.sound = null;
 			}
 		} else {
-			if (app.data?.sound) {
-				app.data.sound = null;
+			if (msg.data?.sound) {
+				msg.data.sound = null;
 			}
 		}
 		html.addClass('gm-roll-hidden');
@@ -254,6 +254,77 @@ class HideGMRolls {
 			});
 		}
 	}
+	
+	static _sanitizeNewReadySetRoll5e(html) {
+		if (!game.modules.get('ready-set-roll-5e')?.active) {
+			return;
+		}
+
+		if (game.settings.get('hide-gm-rolls', 'sanitize-crit-fail')) {
+			const success = html.find('.success');
+			if (success) success.removeClass('success');
+			const failure = html.find('.failure');
+			if (failure) failure.removeClass('failure');
+		}
+
+		const dieIcon = html.find('.dice-total .die-icon').remove();
+		if (dieIcon) dieIcon.remove();
+
+		const attackRoll = html.find('.rsr-section-attack div.dice-tooltip-collapser');
+		if (attackRoll) {
+			attackRoll.remove();
+		}
+
+		const damageFormula  = html.find('.rsr-section-damage dv.dice-formula')
+		if (damageFormula) {
+			damageFormula.remove();
+		}
+
+		const damageRoll = html.find('.rsr-section-damage ol.dice-rolls');
+		if (damageRoll) {
+			damageRoll.remove();
+		}
+
+		const damageResult  = html.find('.rsr-section-damage div.total')
+		if (damageResult) {
+			damageResult.css('flex-basis', '100%')
+		}
+
+		if (game.settings.get('hide-gm-rolls', 'sanitize-ready-set-roll-crit-dmg')) {
+			const crits = html.find('.rsr-damage > .rsr-crit-damage');
+			if (!crits || crits.length === 0) return;
+			crits.each((_, crit) => {
+				const total = crit.parentElement;
+				const base = total.querySelector('.rsr-base-damage');
+				if (!base) {
+					return;
+				}
+				const label = total.querySelector('.rsr5e-roll-label');
+				if (label) {
+					label.remove();
+				}
+				const sum = parseInt(base.dataset.value) + parseInt(crit.dataset.value);
+				base.dataset.value = sum;
+				base.textContent = sum;
+				total.replaceChildren(base);
+			});
+		}
+	}
+
+	static _sanitizeReadySetRoll5eSave(msg, html) {
+		if (!game.modules.get('ready-set-roll-5e')?.active) {
+			return;
+		}
+
+		if (!this._is5eSaveRoll(msg)) {
+			return;
+		}
+
+		const saveResult = html.find('.rsr-multiroll .success, .rsr-multiroll .failure')
+		if (saveResult) {
+			saveResult.removeClass('success failure')
+		}
+	}
 
 	static _sanitizePF2e(html) {
 		if (game.system.id !== 'pf2e') {
@@ -294,6 +365,51 @@ class HideGMRolls {
 		this._sanitizePF2e(html);
 	}
 
+	static sanitize5eRoll(html, msg) {
+		if (!game.settings.get('hide-gm-rolls', 'sanitize-rolls')) return;
+
+		// Skip processing if we're a GM, or the message did not originate from one.
+		if (this.isGMMessage(msg)) {
+			return;
+		}
+		const formula = html.find('div.dice-formula');
+		if (formula) {
+			formula.remove();
+		}
+		if (this._is5eAttackRoll(msg)) {
+			const tooltip = html.find('div.dice-tooltip');
+			if (tooltip) {
+				tooltip.remove();
+			}
+		}
+		else if (this._is5eDamageRoll(msg)) {
+			const diceRoll = html.find('ol.dice-rolls');
+			if (diceRoll) {
+				diceRoll.remove();
+			}
+			const rollResult  = html.find('div.total')
+			if (rollResult) {
+				rollResult.css('flex-basis', '100%')
+			}
+		}
+		this._sanitizeCrits(html);
+		this._sanitizeBetterRolls5e(html);
+		this._sanitizeNewReadySetRoll5e(html);
+		this._sanitizePF2e(html);
+	}
+
+	static _is5eAttackRoll(msg) {
+		return msg.flags.dnd5e?.roll?.type === 'attack'
+	}
+	
+	static _is5eDamageRoll(msg) {
+		return msg.flags.dnd5e?.roll?.type === 'damage'
+	}
+
+	static _is5eSaveRoll(msg) {
+		return msg.flags.dnd5e?.roll?.type === 'save'
+	}
+
 	static sanitizeCard(html, msg) {
 		if (this.isGMMessage(msg)) return;
 		if (game.settings.get('hide-gm-rolls', 'hide-item-description')) {
@@ -310,6 +426,17 @@ class HideGMRolls {
 				if (chevron) {
 					chevron.remove();
 				}
+			}
+		}
+	}
+
+	static sanitize5eCard(html, msg) {
+		if (this.isGMMessage(msg)) return;
+		if (game.settings.get('hide-gm-rolls', 'hide-item-description')) {
+			const description = html.find('div.item-card section.card-content');
+			if (description) {
+				description.empty();
+				description.addClass('gm-roll-hidden');
 			}
 		}
 	}
@@ -354,10 +481,31 @@ Hooks.on('preCreateChatMessage', (doc, _data, _options) => {
 	HideGMRolls.mangleRoll(doc)
 });
 
-Hooks.on('renderChatMessage', (app, html, msg) => {
-	HideGMRolls.hideRoll(app, html, msg);
+Hooks.on('renderChatMessage', (msg, html, msgData) => {
+	// If D&D 5e >=3.X.X, defer until new `dnd5e.renderChatMessage` fires
+	if (game.system.id === 'dnd5e' && isNewerVersion(game.system.version, '3.0.0')){
+		return;
+	}
+	HideGMRolls.hideRoll(html, msg);
 	HideGMRolls.sanitizeRoll(html, msg);
 	HideGMRolls.sanitizeCard(html, msg);
+});
+
+Hooks.on('dnd5e.renderChatMessage', (msg, html) => {
+	// Create JQuery object to maintain compatibility
+	html = $(html);
+	HideGMRolls.hideRoll(html, msg);
+	HideGMRolls.sanitize5eRoll(html, msg);
+	HideGMRolls.sanitize5eCard(html, msg);
+});
+
+Hooks.on('rsrRenderChatMessage', (msg, html) => {
+	// Create JQuery object to maintain compatibility
+	html = $(html);
+	HideGMRolls.hideRoll(html, msg);
+	HideGMRolls.sanitize5eRoll(html, msg);
+	HideGMRolls.sanitize5eCard(html, msg);
+	HideGMRolls._sanitizeReadySetRoll5eSave(msg, html);
 });
 
 Hooks.on('updateChatMessage', (msg, _data, _diff, id) => {
